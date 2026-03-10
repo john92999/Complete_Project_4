@@ -1,0 +1,46 @@
+- name: "trying"
+  hosts: all
+  become: true
+  tasks:
+    - name: install Java
+      ansible.builtin.apt:
+        name: openjdk-11-jdk
+        state: present
+        update_cache: true
+    - name: Add Monogo
+      ansible.builtin.apt_key:
+        url: https://www.mongodb.org/static/pgp/server-6.0.asc
+        state: present
+    - name: Add MongoDB 6.0 APT repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64,arm64] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/6.0 multiverse"
+        state: present
+        filename: mongodb-org-6.0
+    - name: Install MongoDB
+      ansible.builtin.apt:
+        name: mongodb-org
+        state: present
+        update_cache: true
+      notify: start and enable MongoDB
+    - name: Flushing handler so MongoDB is started now
+      ansible.builtin.meta: flush_handlers
+    - name: Add NodeSource APT GPG key
+      ansible.builtin.apt_key:
+        url: https://deb.nodesource.com/gpgkey/nodesource.gpg.key
+        state: present
+    - name: Add NodeSource Node.js 18 repository
+      ansible.builtin.apt_repository:
+        repo: "deb https://deb.nodesource.com/node_18.x {{ ansible_distribution_release }} main"
+        state: present
+        filename: nodesource-node18
+    - name: install nodejs package
+      ansible.builtin.apt:
+        name: nodejs
+        state: present
+        update_cache: true
+  handlers:
+    - name: start and enable MongoDB
+      ansible.builtin.systemd:
+        name: mongod
+        state: started
+        enabled: true
