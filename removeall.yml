@@ -7,6 +7,7 @@
         name: mongod
         state: stopped
         enabled: false
+      when: "'mongod.service' in ansible_facts.services"
 
     - name: Kill any running mongod processes
       ansible.builtin.command: pkill -f mongod
