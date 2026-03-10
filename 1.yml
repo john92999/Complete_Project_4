@@ -7,6 +7,7 @@
         name: openjdk-11-jdk
         state: present
         update_cache: true
+
     - name: Remove old MongoDB repo files
       ansible.builtin.file:
         path: "{{ item }}"
@@ -14,38 +15,46 @@
       loop:
         - /etc/apt/sources.list.d/mongodb-org-6.0.list
         - /etc/apt/sources.list.d/mongodb-org-7.0.list
-    - name: Add Monogo
-      ansible.builtin.get_url:
-        url: https://www.mongodb.org/static/pgp/server-7.0.asc
-        dest: /usr/share/keyrings/mongodb-server-7.0.gpg
-        mode: "0644"
-    - name: Add MongoDB 7.0 APT repository
+        - /etc/apt/sources.list.d/mongodb-org-8.0.list
+
+    - name: Add MongoDB GPG key
+      ansible.builtin.shell:
+        cmd: curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg
+        creates: /usr/share/keyrings/mongodb-server-8.0.gpg
+
+    - name: Add MongoDB 8.0 APT repository
       ansible.builtin.apt_repository:
-        repo: "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/7.0 multiverse"
+        repo: "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse"
         state: present
-        filename: mongodb-org-7.0
+        filename: mongodb-org-8.0
+
     - name: Install MongoDB
       ansible.builtin.apt:
         name: mongodb-org
         state: present
         update_cache: true
       notify: start and enable MongoDB
+
     - name: Flushing handler so MongoDB is started now
       ansible.builtin.meta: flush_handlers
+
     - name: Add NodeSource APT GPG key
       ansible.builtin.apt_key:
         url: https://deb.nodesource.com/gpgkey/nodesource.gpg.key
         state: present
+
     - name: Add NodeSource Node.js 18 repository
       ansible.builtin.apt_repository:
         repo: "deb https://deb.nodesource.com/node_18.x {{ ansible_distribution_release }} main"
         state: present
         filename: nodesource-node18
+
     - name: install nodejs package
       ansible.builtin.apt:
         name: nodejs
         state: present
         update_cache: true
+
   handlers:
     - name: start and enable MongoDB
       ansible.builtin.systemd:
