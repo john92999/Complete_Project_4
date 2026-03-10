@@ -5,6 +5,12 @@
     mongo_db_admin_user: root
     mongo_db_admin_password: password
   tasks:
+    - name: Install pymongo
+      ansible.builtin.pip:
+        name: pymongo
+        state: present
+        extra_args: --break-system-packages
+
     - name: Ensure root user exists in admin database
       community.mongodb.mongodb_user:
         login_host: 127.0.0.1
