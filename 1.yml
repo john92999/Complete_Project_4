@@ -8,12 +8,13 @@
         state: present
         update_cache: true
     - name: Add Monogo
-      ansible.builtin.apt_key:
+      ansible.builtin.get_url:
         url: https://www.mongodb.org/static/pgp/server-6.0.asc
-        state: present
+        dest: /usr/share/keyrings/mongodb-server-6.0.gpg
+        mode: "0644"
     - name: Add MongoDB 6.0 APT repository
       ansible.builtin.apt_repository:
-        repo: "deb [arch=amd64,arm64] https://repo.mongodb.org/apt/ubuntu {{ ansible_distribution_release }}/mongodb-org/6.0 multiverse"
+        repo: "deb [arch=amd64,arm64] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse"
         state: present
         filename: mongodb-org-6.0
     - name: Install MongoDB
