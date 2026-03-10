@@ -9,8 +9,10 @@
         enabled: false
 
     - name: Kill any running mongod processes
-      ansible.builtin.shell: pkill -f mongod
-      ignore_errors: yes
+      ansible.builtin.command: pkill -f mongod
+      register: pkill_result
+      failed_when: false
+      changed_when: pkill_result.rc == 0
 
     - name: remove all the installed packages
       ansible.builtin.apt:
