@@ -214,13 +214,21 @@
           echo "Using backend URL: http://${SERVER_IP}:8080"
 
     - name: Install npm dependencies
-      ansible.builtin.shell: npm install --legacy-peer-deps
+      ansible.builtin.shell: |
+        export NVM_DIR="$HOME/.nvm"
+        source "$NVM_DIR/nvm.sh"
+        npm install --legacy-peer-deps
       args:
         chdir: /home/ubuntu/todo-ui
+        executable: /bin/bash
 
     - name: Start React UI
-      ansible.builtin.shell: npm start
+      ansible.builtin.shell: |
+        export NVM_DIR="$HOME/.nvm"
+        source "$NVM_DIR/nvm.sh"
+        npm start
       args:
         chdir: /home/ubuntu/todo-ui
+        executable: /bin/bash
       async: 3600
       poll: 0
