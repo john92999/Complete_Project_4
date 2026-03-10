@@ -1,0 +1,224 @@
+- name: Install and run the project using ansible
+  hosts: all
+  become: true
+  tasks:
+    - name: Install required files
+      ansible.builtin.apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: yes
+      loop:
+        - openjdk-11-jdk
+        - maven
+        - gnupg
+        - curl
+
+    - name: download mongo db
+      ansible.builtin.get_url:
+        url: https://www.mongodb.org/static/pgp/server-8.0.asc
+        dest: /tmp/mongodb-server-8.0.asc
+
+    - name: convert key to gpg format
+      ansible.builtin.command:
+        cmd: gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg /tmp/mongodb-server-8.0.asc
+
+    - name: Add MongoDB repository
+      ansible.builtin.apt_repository:
+        repo: "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse"
+        filename: mongodb-org-8.0
+        state: present
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: install Mongodb
+      ansible.builtin.apt:
+        name: mongodb-org
+        state: present
+
+    - name: Create the required folders
+      ansible.builtin.file:
+        state: directory
+        path: "{{ item }}"
+        owner: mongodb
+        group: mongodb
+        mode: "0755"
+      loop:
+        - /var/lib/mongodb
+        - /var/log/mongodb
+
+    - name: remove file if present
+      ansible.builtin.file:
+        state: absent
+        path: /tmp/mongodb-27017.sock
+
+    - name: Create mongod.conf
+      ansible.builtin.copy:
+        dest: /etc/mongod.conf
+        mode: "0644"
+        content: |
+          storage:
+            dbPath: /var/lib/mongodb
+
+          systemLog:
+            destination: file
+            logAppend: true
+            path: /var/log/mongodb/mongod.log
+
+          net:
+            port: 27017
+            bindIp: 127.0.0.1
+
+          processManagement:
+            timeZoneInfo: /usr/share/zoneinfo
+
+    - name: Verify auth is not present
+      ansible.builtin.command: grep -i auth /etc/mongod.conf
+      register: auth_check
+      failed_when: auth_check.stdout != ""
+      changed_when: false
+
+    - name: Start and enable Mongo service
+      ansible.builtin.systemd_service:
+        name: mongod
+        state: started
+        enabled: true
+      register: mongod_service
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: verify mongodb status
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['mongod.service'].state == "running"
+        fail_msg: "MongoDB service is not running"
+        success_msg: "MongoDB service is running"
+
+    - name: Install pymongo
+      ansible.builtin.pip:
+        name: pymongo
+        state: present
+        extra_args: --break-system-packages
+
+    - name: Community module
+      community.mongodb.mongodb_user:
+        login_host: 127.0.0.1
+        login_port: 27017
+        database: admin
+        name: root
+        password: password
+        roles:
+          - role: root
+            db: admin
+        state: present
+
+    - name: Create mongod.conf
+      ansible.builtin.copy:
+        dest: /etc/mongod.conf
+        mode: "0644"
+        content: |
+          storage:
+            dbPath: /var/lib/mongodb
+
+          systemLog:
+            destination: file
+            logAppend: true
+            path: /var/log/mongodb/mongod.log
+
+          net:
+            port: 27017
+            bindIp: 127.0.0.1
+
+          security:
+            authorization: enabled
+
+          processManagement:
+            timeZoneInfo: /usr/share/zoneinfo
+
+    - name: restart mongod
+      ansible.builtin.systemd_service:
+        name: mongod
+        state: restarted
+
+    - name: Check MongoDB connection
+      ansible.builtin.command: >
+        mongosh -u root -p password
+        --authenticationDatabase admin
+        --eval "db.adminCommand('ping')"
+      register: mongo_ping
+      changed_when: false
+      failed_when: "'ok: 1' not in mongo_ping.stdout"
+
+    - name: Install NVM
+      ansible.builtin.shell: |
+        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+      args:
+        creates: "{{ ansible_env.HOME }}/.nvm/nvm.sh"
+
+    - name: Load NVM and install Node.js 18
+      ansible.builtin.shell: |
+        export NVM_DIR="$HOME/.nvm"
+        source "$NVM_DIR/nvm.sh"
+        nvm install 18
+        nvm use 18
+        nvm alias default 18
+      args:
+        executable: /bin/bash
+
+    - name: Add NVM to bashrc
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_env.HOME }}/.bashrc"
+        line: 'export NVM_DIR="$HOME/.nvm"'
+        state: present
+
+    - name: Add NVM source line to bashrc
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_env.HOME }}/.bashrc"
+        line: '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"'
+        state: present
+
+    - name: Run Spring Boot application in background
+      ansible.builtin.shell: mvn spring-boot:run > app.log 2>&1 &
+      args:
+        chdir: /home/ubuntu/todo-api
+        executable: /bin/bash
+      async: 3600
+      poll: 0
+
+    - name: Create .env file
+      ansible.builtin.copy:
+        dest: /home/ubuntu/todo-ui/.env
+        content: |
+          REACT_APP_BACKEND_SERVER_URL=DYNAMIC
+
+    - name: copy the env.sh file in /home/ubuntu/todo-ui
+      ansible.builtin.copy:
+        dest: /home/ubuntu/todo-ui/env.sh
+        mode: "0755"
+        content: |
+          #!/bin/bash
+
+          SERVER_IP=$(hostname -I | awk '{print $1}')
+
+          rm -rf ./env-config.js
+          touch ./env-config.js
+
+          echo "window._env_ = {" >> ./env-config.js
+          echo "  REACT_APP_BACKEND_SERVER_URL: \"http://${SERVER_IP}:8080\"," >> ./env-config.js
+          echo "}" >> ./env-config.js
+
+          echo "Using backend URL: http://${SERVER_IP}:8080"
+
+    - name: Install npm dependencies
+      ansible.builtin.shell: npm install --legacy-peer-deps
+      args:
+        chdir: /home/ubuntu/todo-ui
+
+    - name: Start React UI
+      ansible.builtin.shell: npm start
+      args:
+        chdir: /home/ubuntu/todo-ui
+      async: 3600
+      poll: 0
