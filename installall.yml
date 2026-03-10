@@ -149,7 +149,9 @@
         --eval "db.adminCommand('ping')"
       register: mongo_ping
       changed_when: false
-      failed_when: "'ok: 1' not in mongo_ping.stdout"
+      retries: 10
+      delay: 3
+      until: "'ok: 1' in mongo_ping.stdout"
 
     - name: Install NVM
       ansible.builtin.shell: |
