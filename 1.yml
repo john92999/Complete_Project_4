@@ -8,6 +8,11 @@
         state: present
         update_cache: true
 
+    - name: Install curl
+      ansible.builtin.apt:
+        name: curl
+        state: present
+
     - name: Remove old MongoDB repo files
       ansible.builtin.file:
         path: "{{ item }}"
@@ -17,10 +22,14 @@
         - /etc/apt/sources.list.d/mongodb-org-7.0.list
         - /etc/apt/sources.list.d/mongodb-org-8.0.list
 
+    - name: Remove old MongoDB GPG keyring
+      ansible.builtin.file:
+        path: /usr/share/keyrings/mongodb-server-8.0.gpg
+        state: absent
+
     - name: Add MongoDB GPG key
       ansible.builtin.shell:
         cmd: curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg
-        creates: /usr/share/keyrings/mongodb-server-8.0.gpg
 
     - name: Add MongoDB 8.0 APT repository
       ansible.builtin.apt_repository:
@@ -38,16 +47,20 @@
     - name: Flushing handler so MongoDB is started now
       ansible.builtin.meta: flush_handlers
 
-    - name: Add NodeSource APT GPG key
-      ansible.builtin.apt_key:
-        url: https://deb.nodesource.com/gpgkey/nodesource.gpg.key
-        state: present
+    - name: Remove old NodeSource GPG keyring
+      ansible.builtin.file:
+        path: /usr/share/keyrings/nodesource.gpg
+        state: absent
 
-    - name: Add NodeSource Node.js 18 repository
+    - name: Add NodeSource GPG key
+      ansible.builtin.shell:
+        cmd: curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg
+
+    - name: Add NodeSource Node.js 20 repository
       ansible.builtin.apt_repository:
-        repo: "deb https://deb.nodesource.com/node_18.x {{ ansible_distribution_release }} main"
+        repo: "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main"
         state: present
-        filename: nodesource-node18
+        filename: nodesource-node20
 
     - name: install nodejs package
       ansible.builtin.apt:
