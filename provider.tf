@@ -4,5 +4,5 @@ provider "aws" {
 
 provider "vault" {
   address = "http://10.48.17.203:8200"
-  # need to add token here
+  # ADD TOKEN HERE LATER
 }
