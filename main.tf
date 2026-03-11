@@ -1,8 +1,8 @@
 module "vpc" {
     source = "./modules/vpc"
-    region = var.region
-    cidr_block = var.cidr_block
-    Name = var.Name
-    subnet_availability_zone = var.subnet_availability_zone
-    subnet_cidr_block = var.subnet_cidr_block
+    region = local.region
+    cidr_block = local.cidr_block
+    Name = local.Name
+    subnet_availability_zone = local.subnet_azs
+    subnet_cidr_block = local.subnet_cidrs
 }
