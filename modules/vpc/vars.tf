@@ -12,3 +12,13 @@ variable "Name" {
     description = "name of the VPC_CIDR"
     type = string
 }
+
+variable "subnet_availability_zone" {
+    description = "Where the subnetes are"
+    type = list(string)
+}
+
+variable "subnet_cidr_block" {
+    description = "Aubntes of the cidr block"
+    type = list(string)
+}

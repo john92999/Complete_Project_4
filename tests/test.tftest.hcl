@@ -13,6 +13,8 @@ run "vpc_cidr_is_correct" {
         region     = "ap-south-1"
         cidr_block = "10.0.0.0/16"
         Name       = "main-vpc"
+        subnet_cidr_block = ["10.0.1.0/24", "10.0.2.0/24"]
+        subnet_availability_zone = ["ap-south-1a", "ap-south-1b"]
     }
 
     assert {
@@ -23,6 +25,11 @@ run "vpc_cidr_is_correct" {
     assert {
         condition     = module.vpc.vpc_tags["Name"] == "main-vpc"   
         error_message = "Name tag is wrong"
+    }
+
+    assert {
+        condition = module.vpc.subnet_cidr_block == ["10.0.1.0/24", "10.0.2.0/24"]
+        error_message = "subnet CIDR blocks are incorrect"
     }
 
 
