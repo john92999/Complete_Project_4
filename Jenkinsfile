@@ -10,7 +10,10 @@ pipeline {
         SONAR_HOST       = 'http://10.48.17.203:32000'
         BACKEND_DIR      = '/home/ubuntu/todo-api'
         FRONTEND_DIR     = '/home/ubuntu/todo-ui'
-        PATH             = "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:${env.PATH}"
+
+        // Jenkins runs on Java 21 — Maven builds use Java 11
+        JAVA_HOME        = '/usr/lib/jvm/java-11-openjdk-amd64'
+        PATH             = "/usr/lib/jvm/java-11-openjdk-amd64/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
     }
 
     stages {
@@ -38,6 +41,8 @@ pipeline {
         stage('Build') {
             steps {
                 sh '''
+                    echo "Using Java version:"
+                    java -version
                     cd ${BACKEND_DIR}
                     mvn clean package -DskipTests
                 '''
@@ -103,7 +108,9 @@ pipeline {
                     pkill -f "todo-api" || true
                     sleep 3
 
-                    nohup java -jar ${BACKEND_DIR}/todo-api-${ARTIFACT_VERSION}.jar \
+                    # Deploy using Java 11
+                    nohup /usr/lib/jvm/java-11-openjdk-amd64/bin/java \
+                        -jar ${BACKEND_DIR}/todo-api-${ARTIFACT_VERSION}.jar \
                         --spring.data.mongodb.username=${MONGO_USER} \
                         --spring.data.mongodb.password=${MONGO_PASSWORD} \
                         > ${BACKEND_DIR}/app.log 2>&1 &
@@ -134,7 +141,7 @@ pipeline {
             echo "Pipeline SUCCESS - version ${ARTIFACT_VERSION} deployed"
         }
         failure {
-            echo "Pipeline FAILED - check SonarQube quality gate or build logs"
+            echo "Pipeline FAILED - check logs"
         }
     }
 }
