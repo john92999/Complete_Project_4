@@ -8,17 +8,12 @@ pipeline {
         JFROG_REPO       = 'todo-libs-release'
         ARTIFACT_VERSION = "1.0.${BUILD_NUMBER}"
         SONAR_HOST       = 'http://10.48.17.203:32000'
-        // Fix PATH so Jenkins can find aws, java, mvn
+        BACKEND_DIR      = '/home/ubuntu/todo-api'
+        FRONTEND_DIR     = '/home/ubuntu/todo-ui'
         PATH             = "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:${env.PATH}"
     }
 
     stages {
-
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
 
         stage('Fetch Secrets') {
             steps {
@@ -43,7 +38,7 @@ pipeline {
         stage('Build') {
             steps {
                 sh '''
-                    cd /home/ubuntu/todo-api
+                    cd ${BACKEND_DIR}
                     mvn clean package -DskipTests
                 '''
             }
@@ -52,14 +47,14 @@ pipeline {
         stage('Test') {
             steps {
                 sh '''
-                    cd /home/ubuntu/todo-api
+                    cd ${BACKEND_DIR}
                     mvn test
                 '''
             }
             post {
                 always {
                     junit allowEmptyResults: true,
-                          testResults: '/home/ubuntu/todo-api/target/surefire-reports/*.xml'
+                          testResults: "${BACKEND_DIR}/target/surefire-reports/*.xml"
                 }
             }
         }
@@ -67,7 +62,7 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 sh '''
-                    cd /home/ubuntu/todo-api
+                    cd ${BACKEND_DIR}
                     mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
                         -Dsonar.projectKey=todo-api \
                         -Dsonar.projectName='todo-api' \
@@ -88,7 +83,7 @@ pipeline {
         stage('Push to JFrog') {
             steps {
                 sh '''
-                    JAR_FILE=$(find /home/ubuntu/todo-api/target -name "*.jar" ! -name "*sources*" | head -1)
+                    JAR_FILE=$(find ${BACKEND_DIR}/target -name "*.jar" ! -name "*sources*" | head -1)
                     echo "Pushing ${JAR_FILE} as version ${ARTIFACT_VERSION}..."
                     curl -u ${JFROG_USER}:${JFROG_TOKEN} \
                         -T ${JAR_FILE} \
@@ -102,15 +97,16 @@ pipeline {
             steps {
                 sh '''
                     curl -u ${JFROG_USER}:${JFROG_TOKEN} \
-                        -O "${JFROG_URL}/artifactory/${JFROG_REPO}/com/todo/todo-api/${ARTIFACT_VERSION}/todo-api-${ARTIFACT_VERSION}.jar"
+                        -o ${BACKEND_DIR}/todo-api-${ARTIFACT_VERSION}.jar \
+                        "${JFROG_URL}/artifactory/${JFROG_REPO}/com/todo/todo-api/${ARTIFACT_VERSION}/todo-api-${ARTIFACT_VERSION}.jar"
 
                     pkill -f "todo-api" || true
                     sleep 3
 
-                    nohup java -jar todo-api-${ARTIFACT_VERSION}.jar \
+                    nohup java -jar ${BACKEND_DIR}/todo-api-${ARTIFACT_VERSION}.jar \
                         --spring.data.mongodb.username=${MONGO_USER} \
                         --spring.data.mongodb.password=${MONGO_PASSWORD} \
-                        > /home/ubuntu/todo-api/app.log 2>&1 &
+                        > ${BACKEND_DIR}/app.log 2>&1 &
 
                     echo "Deployed version: ${ARTIFACT_VERSION}"
                 '''
@@ -120,13 +116,13 @@ pipeline {
         stage('Deploy Frontend') {
             steps {
                 sh '''
-                    export NVM_DIR="$HOME/.nvm"
+                    export NVM_DIR="/home/ubuntu/.nvm"
                     source "$NVM_DIR/nvm.sh"
                     pkill -f "react-scripts start" || true
                     sleep 3
-                    cd /home/ubuntu/todo-ui
+                    cd ${FRONTEND_DIR}
                     bash env.sh
-                    nohup npm start > ui.log 2>&1 &
+                    nohup npm start > ${FRONTEND_DIR}/ui.log 2>&1 &
                     echo "Frontend deployed"
                 '''
             }
