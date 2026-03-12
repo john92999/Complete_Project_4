@@ -33,12 +33,22 @@ pipeline{
                 }
             }
         }
-        stage('Build'){
-            steps{
-                sh'''
-                cd ${BACKEND_DIR}
-                mvn clean package -DskipTests
-                ls -lh ${BACKEND_DIR}/target/*.jar
+        stage('Build') {
+            steps {
+                sh '''
+                    # Force Java 11 explicitly for this stage
+                    export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+                    export PATH=$JAVA_HOME/bin:$PATH
+
+                    echo "=== Verifying Java version (must be 11) ==="
+                    java -version
+
+                    echo "=== Starting build ==="
+                    cd ${BACKEND_DIR}
+                    mvn clean package -DskipTests
+
+                    echo "=== Build output ==="
+                    ls -lh ${BACKEND_DIR}/target/*.jar
                 '''
             }
         }
