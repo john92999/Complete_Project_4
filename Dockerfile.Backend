@@ -1,0 +1,17 @@
+FROM maven:3.9.13-eclipse-temurin-11 AS Builder
+
+WORKDIR /app
+
+COPY /home/ubuntu/todo-api/ .
+
+RUN mvn clean package -DskipTests
+
+FROM eclipse-temurin:11-jre AS Runner
+
+COPY --from=Builder /app/target/todo-api-0.0.1-SNAPSHOT.jar .
+
+EXPOSE 8080
+
+CMD ["java", "-jar", "todo-api-0.0.1-SNAPSHOT.jar", \
+     "--spring.data.mongodb.username=root", \
+     "--spring.data.mongodb.password=password"]

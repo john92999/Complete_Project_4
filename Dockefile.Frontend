@@ -1,0 +1,11 @@
+FROM node:18
+
+WORKDIR /app
+
+COPY /home/ubuntu/todo-ui/ .
+
+RUN npm install --legacy-peer-deps
+
+EXPOSE 3000
+
+CMD ["npm", "start"]
