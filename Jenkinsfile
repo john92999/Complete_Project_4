@@ -164,39 +164,31 @@ pipeline{
                 sh '''
                     echo "=== Setting up Node.js via NVM ==="
                     export NVM_DIR="/home/ubuntu1/.nvm"
-                    source "$NVM_DIR/nvm.sh"
+                    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
                     echo "Node version: $(node --version)"
                     echo "NPM version:  $(npm --version)"
 
                     echo "=== Stopping currently running frontend ==="
-                    pkill -f "react-scripts" || true
+                    pkill -f "react-scripts start" || true
                     sleep 3
-                    echo "Old instance stopped"
-
-                    echo "=== Setting environment variables ==="
-                    cd ${FRONTEND_DIR}
-                    bash env.sh
 
                     echo "=== Starting React frontend ==="
+                    cd ${FRONTEND_DIR}
                     nohup npm start > ${FRONTEND_DIR}/ui.log 2>&1 &
 
-                    echo "Waiting for frontend to start..."
                     sleep 10
 
-                    echo "=== Checking if frontend started ==="
                     if pgrep -f "react-scripts" > /dev/null; then
                         echo "Frontend is running ✅"
                     else
                         echo "Frontend failed to start ❌"
-                        echo "Last 20 lines of ui.log:"
                         tail -20 ${FRONTEND_DIR}/ui.log
                         exit 1
                     fi
                 '''
             }
         }
-
     }
         post {
         success {
