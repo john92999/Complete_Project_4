@@ -1,0 +1,53 @@
+version: "3.8"
+
+services:
+  mongo:
+    build:
+      context: .
+      dockerfile: MongoDockerfile
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD}
+    ports:
+      - "27017:27017"
+    networks:
+      - todo-network
+    restart: on-failure
+
+  backend:
+    build:
+      context: /home/ubuntu1/todo-api
+      dockerfile: Dockerfile.Backend
+    container_name: todo-backend
+    environment:
+      - MONGO_USER=${MONGO_USER}
+      - MONGO_PASSWORD=${MONGO_PASSWORD}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - mongo
+    networks:
+      - todo-network
+    restart: on-failure
+
+  frontend:
+    build:
+      context: /home/ubuntu1/todo-ui
+      dockerfile: Dockerfile.frontend
+    container_name: todo-frontend
+    environment:
+      - REACT_APP_BACKEND_SERVER_URL=http://backend:8080
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - todo-network
+    restart: on-failure
+
+networks:
+  todo-network:
+    driver: bridge
+
+volumes:
+  mongo-data:
