@@ -74,18 +74,20 @@ pipeline{
         }
         stage('SonarQube Analysis') {
             steps {
-                sh '''
-                    export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
-                    export PATH=$JAVA_HOME/bin:$PATH
-                    cd ${BACKEND_DIR}
-                    mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
-                        -Dexclude='**/TodoApplicationTests.java' \
-                        -Dmaven.test.failure.ignore=true \
-                        -Dsonar.projectKey=todo-api \
-                        -Dsonar.projectName='todo-api' \
-                        -Dsonar.host.url=${SONAR_HOST} \
-                        -Dsonar.token=${SONAR_TOKEN}
-                '''
+                withSonarQubeEnv('sonarqube') {
+                    sh '''
+                        export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+                        export PATH=$JAVA_HOME/bin:$PATH
+                        cd ${BACKEND_DIR}
+                        mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+                            -Dexclude='**/TodoApplicationTests.java' \
+                            -Dmaven.test.failure.ignore=true \
+                            -Dsonar.projectKey=todo-api \
+                            -Dsonar.projectName='todo-api' \
+                            -Dsonar.host.url=${SONAR_HOST} \
+                            -Dsonar.token=${SONAR_TOKEN}
+                    '''
+                }
             }
         }
         stage('Quality Gate'){
