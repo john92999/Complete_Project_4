@@ -74,22 +74,39 @@ pipeline{
         }
         stage('SonarQube Analysis + Quality Gate') {
             steps {
-                withSonarQubeEnv('sonarqube') {
-                    sh '''
-                        export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
-                        export PATH=$JAVA_HOME/bin:$PATH
-                        cd ${BACKEND_DIR}
-                        mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
-                            -Dexclude='**/TodoApplicationTests.java' \
-                            -Dmaven.test.failure.ignore=true \
-                            -Dsonar.projectKey=todo-api \
-                            -Dsonar.projectName='todo-api' \
-                            -Dsonar.host.url=${SONAR_HOST} \
-                            -Dsonar.token=${SONAR_TOKEN}
-                    '''
-                }
-                timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
+                script {
+                    withSonarQubeEnv('sonarqube') {
+                        sh '''
+                            export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+                            export PATH=$JAVA_HOME/bin:$PATH
+                            cd ${BACKEND_DIR}
+                            mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+                                -Dexclude='**/TodoApplicationTests.java' \
+                                -Dmaven.test.failure.ignore=true \
+                                -Dsonar.projectKey=todo-api \
+                                -Dsonar.projectName='todo-api' \
+                                -Dsonar.host.url=${SONAR_HOST} \
+                                -Dsonar.token=${SONAR_TOKEN}
+                        '''
+                    }
+                    sleep(time: 15, unit: 'SECONDS')
+
+                    def qgStatus = sh(
+                        script: """
+                            curl -s -u ${SONAR_TOKEN}: \
+                                "${SONAR_HOST}/api/qualitygates/project_status?projectKey=todo-api" \
+                                | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Quality Gate Status: ${qgStatus}"
+
+                    if (qgStatus != 'OK') {
+                        error "Quality Gate FAILED — status: ${qgStatus}. Check SonarQube at ${SONAR_HOST}"
+                    } else {
+                        echo "Quality Gate PASSED ✅"
+                    }
                 }
             }
         }
