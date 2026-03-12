@@ -1,152 +1,211 @@
-pipeline {
+pipeline{
     agent any
-
-    environment {
-        AWS_REGION       = 'ap-south-1'
-        SECRET_NAME      = 'todo/app/credentials/2'
-        JFROG_URL        = 'http://10.48.17.203:32082'
-        JFROG_REPO       = 'todo-libs-release'
+    environment{
+        AWS_REGION = "ap-south-1"
+        SECRET_NAME = "todo/app/credentials/2"
+        JFROG_URL = "http://10.48.17.40:30465"
+        JFROG_REPO = "todo-libs-release"
         ARTIFACT_VERSION = "1.0.${BUILD_NUMBER}"
-        SONAR_HOST       = 'http://10.48.17.203:32000'
-        BACKEND_DIR      = '/home/ubuntu/todo-api'
-        FRONTEND_DIR     = '/home/ubuntu/todo-ui'
-        JAVA_HOME        = '/usr/lib/jvm/java-11-openjdk-amd64'
-        PATH             = "/usr/lib/jvm/java-11-openjdk-amd64/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+        SONAR_HOST = "http://10.48.17.40:32000"
+        BACKEND_DIR = "/home/ubuntu1/todo-api"
+        FRONTEND_DIR = "/home/ubuntu1/todo-ui"
+        JAVA_HOME = "/usr/lib/jvm/java-11-openjdk-amd64"
+        PATH = "/usr/lib/jvm/java-11-openjdk-amd64/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
     }
-
-    stages {
-
-        stage('Fetch Secrets') {
-            steps {
-                script {
+    stages{
+        stage ('Fetch Secrets'){
+            steps{
+                script{
                     def secret = sh(
                         script: '/usr/local/bin/aws secretsmanager get-secret-value --secret-id todo/app/credentials/2 --region ap-south-1 --query SecretString --output text',
                         returnStdout: true
                     ).trim()
-
+                    
                     def json = readJSON text: secret
 
-                    env.MONGO_USER     = json.MONGO_USER
+                    env.MONGO_USER = json.MONGO_USER
                     env.MONGO_PASSWORD = json.MONGO_PASSWORD
-                    env.JFROG_USER     = json.JFROG_USER
+                    env.JFROG_USER = json.JFROG_USER
                     env.JFROG_PASSWORD = json.JFROG_PASSWORD
-                    env.JFROG_TOKEN    = json.JFROG_TOKEN
-                    env.SONAR_TOKEN    = json.SONAR_TOKEN
+                    env.JFROG_TOKEN = json.JFROG_TOKEN
+                    env.SONAR_TOKEN = json.SONAR_TOKEN
+                    echo "Secrets fetched successfully"
                 }
             }
         }
-
-        stage('Build') {
-            steps {
-                sh '''
-                    echo "Using Java version:"
-                    java -version
-                    cd ${BACKEND_DIR}
-                    mvn clean package -DskipTests
+        stage('Build'){
+            steps{
+                sh'''
+                cd ${BACKEND_DIR}
+                mvn clean package -DskipTests
+                ls -lh ${BACKEND_DIR}/target/*.jar
                 '''
             }
         }
-
-        // Skip Spring Boot integration tests, only run unit tests
-        stage('Test') {
-            steps {
-                timeout(time: 3, unit: 'MINUTES') {
+        stage('test'){
+            steps{
+                timeout(time:3, unit: 'MINUTES'){
                     sh '''
-                        cd ${BACKEND_DIR}
-                        mvn test \
-                            -Dspring.main.web-application-type=none \
-                            -Dspring.autoconfigure.exclude=org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration,org.springframework.boot.autoconfigure.data.mongo.MongoDataAutoConfiguration \
-                            -Dmaven.test.failure.ignore=true
+                    cd ${BACKEND_DIR}
+                    mvn test \
+                        -Dspring.main.web-application-type=none \
+                        -Dspring.autoconfigure.exclude=org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration,org.springframework.boot.autoconfigure.data.mongo.MongoDataAutoConfiguration \
+                        -Dmaven.test.failure.ignore=true
+                    ls -lh ${BACKEND_DIR}/target/surefire-reports/ 2>/dev/null || echo "No test reports found"
                     '''
                 }
             }
-            post {
-                always {
+            post{
+                always{
                     junit allowEmptyResults: true,
-                          testResults: "${BACKEND_DIR}/target/surefire-reports/*.xml"
+                        testResults: "${BACKEND_DIR}/target/surefire-reports/*.xml"
                 }
             }
         }
-
-        stage('SonarQube Analysis') {
-            steps {
+        stage('SonarQube Analysis'){
+            steps{
                 sh '''
-                    cd ${BACKEND_DIR}
-                    mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
-                        -Dspring.main.web-application-type=none \
-                        -Dspring.autoconfigure.exclude=org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration,org.springframework.boot.autoconfigure.data.mongo.MongoDataAutoConfiguration \
-                        -Dsonar.projectKey=todo-api \
-                        -Dsonar.projectName='todo-api' \
-                        -Dsonar.host.url=${SONAR_HOST} \
-                        -Dsonar.token=${SONAR_TOKEN}
+                cd ${BACKEND_DIR}
+                mvn clean verify  org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+                    -Dspring.main.web-application-type=none \
+                    -Dspring.autoconfigure.exclude=org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration,org.springframework.boot.autoconfigure.data.mongo.MongoDataAutoConfiguration \
+                    -Dsonar.projectKey=todo-api \
+                    -Dsonar.projectName='todo-api' \
+                    -Dsonar.host.url=${SONAR_HOST} \
+                    -Dsonar.token=${SONAR_TOKEN}
                 '''
             }
         }
-
-        stage('Quality Gate') {
-            steps {
-                timeout(time: 5, unit: 'MINUTES') {
+        stage('Quality Gate'){
+            steps{
+                timeout(time: 5, unit: 'MINUTES'){
                     waitForQualityGate abortPipeline: true
                 }
             }
         }
-
-        stage('Push to JFrog') {
-            steps {
+        stage('Push the build to Jfrog'){
+            steps{
                 sh '''
-                    JAR_FILE=$(find ${BACKEND_DIR}/target -name "*.jar" ! -name "*sources*" | head -1)
-                    echo "Pushing ${JAR_FILE} as version ${ARTIFACT_VERSION}..."
-                    curl -u ${JFROG_USER}:${JFROG_TOKEN} \
-                        -T ${JAR_FILE} \
-                        "${JFROG_URL}/artifactory/${JFROG_REPO}/com/todo/todo-api/${ARTIFACT_VERSION}/todo-api-${ARTIFACT_VERSION}.jar"
-                    echo "Pushed: todo-api-${ARTIFACT_VERSION}.jar"
+                JAR_FILE=$(find ${BACKEND_DIR}/target -name "*.jar" ! -name "*sources*" | head -1)
+                echo "Found JAR: ${JAR_FILE}"
+                curl -f -u ${JFROG_USER}:${JFROG_TOKEN} \
+                    -T ${JAR_FILE} \
+                    "${JFROG_URL}/artifactory/${JFROG_REPO}/com/todo/todo-api/${ARTIFACT_VERSION}/todo-api-${ARTIFACT_VERSION}.jar"
+                curl -s -o /dev/null -w "Upload response code: %{http_code}" \
+                    -u ${JFROG_USER}:${JFROG_TOKEN} \
+                    "${JFROG_URL}/artifactory/${JFROG_REPO}/com/todo/todo-api/${ARTIFACT_VERSION}/todo-api-${ARTIFACT_VERSION}.jar"
+                echo "${JFROG_URL}/artifactory/${JFROG_REPO}/com/todo/todo-api/${ARTIFACT_VERSION}/todo-api-${ARTIFACT_VERSION}.jar"
                 '''
             }
         }
-
-        stage('Deploy Backend') {
-            steps {
+        stage('Approval gate'){
+            steps{
+                timeout(time: 10, unit: 'MINUTES'){
+                    input message: """
+                    Deploy version ${ARTIFACT_VERSION} to server?
+                    """,
+                    ok: 'Yes, Deploy Now'
+                }
+            }
+        }
+        stage('Deploy Backend'){
+            steps{
                 sh '''
-                    curl -u ${JFROG_USER}:${JFROG_TOKEN} \
-                        -o ${BACKEND_DIR}/todo-api-${ARTIFACT_VERSION}.jar \
-                        "${JFROG_URL}/artifactory/${JFROG_REPO}/com/todo/todo-api/${ARTIFACT_VERSION}/todo-api-${ARTIFACT_VERSION}.jar"
-
-                    pkill -f "todo-api" || true
-                    sleep 3
-
-                    nohup /usr/lib/jvm/java-11-openjdk-amd64/bin/java \
-                        -jar ${BACKEND_DIR}/todo-api-${ARTIFACT_VERSION}.jar \
-                        --spring.data.mongodb.username=${MONGO_USER} \
-                        --spring.data.mongodb.password=${MONGO_PASSWORD} \
-                        > ${BACKEND_DIR}/app.log 2>&1 &
-
-                    echo "Deployed version: ${ARTIFACT_VERSION}"
+                curl -f -u ${JFROG_USER}:${JFROG_TOKEN} \
+                    -o ${BACKEND_DIR}/todo-api-${ARTIFACT_VERSION}.jar \
+                    "${JFROG_URL}/artifactory/${JFROG_REPO}/com/todo/todo-api/${ARTIFACT_VERSION}/todo-api-${ARTIFACT_VERSION}.jar"
+                pkill -f "todo-api.*jar" || true
+                sleep 3
+                nohup /usr/lib/jvm/java-11-openjdk-amd64/bin/java \
+                    -jar ${BACKEND_DIR}/todo-api-${ARTIFACT_VERSION}.jar \
+                    --spring.data.mongodb.username=${MONGO_USER} \
+                    --spring.data.mongodb.password=${MONGO_PASSWORD} \
+                    > ${BACKEND_DIR}/app.log 2>&1 &
+                    if pgrep -f "todo-api-${ARTIFACT_VERSION}" > /dev/null; then
+                        echo "Backend is running ✅"
+                    else
+                        echo "Backend failed to start ❌"
+                        echo "Last 20 lines of app.log:"
+                        tail -20 ${BACKEND_DIR}/app.log
+                        exit 1
+                    fi
                 '''
             }
         }
-
         stage('Deploy Frontend') {
             steps {
                 sh '''
-                    export NVM_DIR="/home/ubuntu/.nvm"
+                    echo "=== Setting up Node.js via NVM ==="
+                    export NVM_DIR="/home/ubuntu1/.nvm"
                     source "$NVM_DIR/nvm.sh"
-                    pkill -f "react-scripts start" || true
+
+                    echo "Node version: $(node --version)"
+                    echo "NPM version:  $(npm --version)"
+
+                    echo "=== Stopping currently running frontend ==="
+                    pkill -f "react-scripts" || true
                     sleep 3
+                    echo "Old instance stopped"
+
+                    echo "=== Setting environment variables ==="
                     cd ${FRONTEND_DIR}
                     bash env.sh
+
+                    echo "=== Starting React frontend ==="
                     nohup npm start > ${FRONTEND_DIR}/ui.log 2>&1 &
-                    echo "Frontend deployed"
+
+                    echo "Waiting for frontend to start..."
+                    sleep 10
+
+                    echo "=== Checking if frontend started ==="
+                    if pgrep -f "react-scripts" > /dev/null; then
+                        echo "Frontend is running ✅"
+                    else
+                        echo "Frontend failed to start ❌"
+                        echo "Last 20 lines of ui.log:"
+                        tail -20 ${FRONTEND_DIR}/ui.log
+                        exit 1
+                    fi
                 '''
             }
         }
-    }
 
-    post {
+    }
+        post {
         success {
-            echo "Pipeline SUCCESS - version ${ARTIFACT_VERSION} deployed"
+            echo """
+            ╔══════════════════════════════════════════════╗
+            ║   PIPELINE SUCCESS ✅                        ║
+            ║   Version ${ARTIFACT_VERSION} deployed       ║
+            ║                                              ║
+            ║   Backend logs:                              ║
+            ║   tail -f /home/ubuntu1/todo-api/app.log     ║
+            ║                                              ║
+            ║   Frontend logs:                             ║
+            ║   tail -f /home/ubuntu1/todo-ui/ui.log       ║
+            ╚══════════════════════════════════════════════╝
+            """
         }
         failure {
-            echo "Pipeline FAILED - check logs"
+            echo """
+            ╔══════════════════════════════════════════════╗
+            ║   PIPELINE FAILED ❌                         ║
+            ║                                              ║
+            ║   Check which stage is RED in Jenkins UI     ║
+            ║   Click the stage → View Logs                ║
+            ║                                              ║
+            ║   Common fixes:                              ║
+            ║   Build failed    → check Java/Maven version ║
+            ║   Tests failed    → check app.log            ║
+            ║   Quality Gate    → check SonarQube coverage ║
+            ║   JFrog failed    → check token in AWS       ║
+            ║   Deploy failed   → check MongoDB is running ║
+            ╚══════════════════════════════════════════════╝
+            """
+        }
+        aborted {
+            echo "Pipeline was manually aborted at the Approval Gate. No deployment was made."
         }
     }
+
 }

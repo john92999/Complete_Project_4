@@ -1,0 +1,702 @@
+pipeline {
+
+    // ─────────────────────────────────────────────────────────────
+    // AGENT
+    // Tells Jenkins WHERE to run this pipeline.
+    // "any" means run on this Jenkins server itself.
+    // ─────────────────────────────────────────────────────────────
+    agent any
+
+    // ─────────────────────────────────────────────────────────────
+    // ENVIRONMENT VARIABLES
+    // These are like global variables available in every stage.
+    // You only need to change values here if server IP changes.
+    // ─────────────────────────────────────────────────────────────
+    environment {
+        // AWS settings - where your secrets are stored
+        AWS_REGION       = 'ap-south-1'
+        SECRET_NAME      = 'todo/app/credentials/2'
+
+        // JFrog settings - where your built JAR will be uploaded
+        JFROG_URL        = 'http://10.48.17.40:30465'
+        JFROG_REPO       = 'todo-libs-release'
+
+        // Version number - auto increments with every build
+        // BUILD_NUMBER is automatic: build 1 = 1.0.1, build 2 = 1.0.2 etc.
+        ARTIFACT_VERSION = "1.0.${BUILD_NUMBER}"
+
+        // SonarQube settings - where code quality is checked
+        SONAR_HOST       = 'http://10.48.17.40:32000'
+
+        // Where your code lives on the server
+        BACKEND_DIR      = '/home/ubuntu1/todo-api'
+        FRONTEND_DIR     = '/home/ubuntu1/todo-ui'
+
+        // Java settings:
+        // Jenkins itself runs on Java 21
+        // But your Spring Boot project needs Java 11 to compile
+        // So we override JAVA_HOME and PATH here to use Java 11
+        // only inside the pipeline stages
+        JAVA_HOME        = '/usr/lib/jvm/java-11-openjdk-amd64'
+        PATH             = "/usr/lib/jvm/java-11-openjdk-amd64/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+    }
+
+    stages {
+
+        // ═════════════════════════════════════════════════════════
+        // STAGE 1 — FETCH SECRETS
+        // ═════════════════════════════════════════════════════════
+        //
+        // WHAT IS THIS STAGE?
+        // This stage talks to AWS Secrets Manager and gets all
+        // the passwords your pipeline needs (MongoDB, JFrog, SonarQube).
+        //
+        // WHY DO WE DO THIS?
+        // Passwords should NEVER be written directly in code.
+        // If someone sees your Jenkinsfile on GitHub, they should
+        // not be able to see your passwords.
+        // AWS Secrets Manager stores them encrypted and gives them
+        // to Jenkins only when asked with valid AWS credentials.
+        //
+        // HOW DOES IT WORK?
+        // 1. Runs the AWS CLI command to get the secret
+        // 2. The secret comes back as a JSON string like:
+        //    {"MONGO_USER":"root","MONGO_PASSWORD":"password",...}
+        // 3. readJSON parses that string into a usable object
+        // 4. Each value is saved as an environment variable
+        //    so all later stages can use them
+        //
+        // WHAT IS returnStdout: true?
+        // Normally sh() just runs a command and shows output on screen.
+        // returnStdout: true means: capture the output into a variable
+        // instead of just printing it.
+        //
+        // WHAT IS .trim()?
+        // Removes any extra spaces or newlines from the end of output.
+        //
+        // ═════════════════════════════════════════════════════════
+        stage('Fetch Secrets') {
+            steps {
+                script {
+                    // Run AWS CLI command and capture the output
+                    def secret = sh(
+                        script: '/usr/local/bin/aws secretsmanager get-secret-value --secret-id todo/app/credentials/2 --region ap-south-1 --query SecretString --output text',
+                        returnStdout: true
+                    ).trim()
+
+                    // Parse the JSON string into an object
+                    // readJSON comes from "Pipeline Utility Steps" plugin
+                    def json = readJSON text: secret
+
+                    // Save each value as environment variable
+                    // These are now available to ALL stages below
+                    env.MONGO_USER     = json.MONGO_USER
+                    env.MONGO_PASSWORD = json.MONGO_PASSWORD
+                    env.JFROG_USER     = json.JFROG_USER
+                    env.JFROG_PASSWORD = json.JFROG_PASSWORD
+                    env.JFROG_TOKEN    = json.JFROG_TOKEN
+                    env.SONAR_TOKEN    = json.SONAR_TOKEN
+
+                    echo "Secrets fetched successfully"
+                }
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════
+        // STAGE 2 — BUILD
+        // ═════════════════════════════════════════════════════════
+        //
+        // WHAT IS THIS STAGE?
+        // This stage compiles your Java Spring Boot code and
+        // packages it into a single runnable JAR file.
+        //
+        // WHY DO WE DO THIS?
+        // Your code is written in Java (.java files).
+        // A server cannot run .java files directly.
+        // Maven compiles them into a .class files and then
+        // packages everything into a single .jar file that
+        // can be run with: java -jar yourapp.jar
+        //
+        // WHAT DOES EACH COMMAND DO?
+        // mvn clean   → deletes the old "target" folder
+        //               (removes any previously compiled files)
+        //               This ensures a fresh build every time
+        //
+        // mvn package → does 3 things:
+        //               1. Compiles all .java files
+        //               2. Runs resource processing
+        //               3. Packages everything into a .jar file
+        //
+        // -DskipTests → tells Maven: skip running tests in this stage
+        //               We have a separate Test stage for that
+        //               This makes the build faster
+        //
+        // WHERE IS THE OUTPUT?
+        // After this stage, a file is created at:
+        // /home/ubuntu1/todo-api/target/todo-api-0.0.1-SNAPSHOT.jar
+        //
+        // ═════════════════════════════════════════════════════════
+        stage('Build') {
+            steps {
+                sh '''
+                    echo "=== Java version being used ==="
+                    java -version
+
+                    echo "=== Maven version being used ==="
+                    mvn -version
+
+                    echo "=== Starting build ==="
+                    cd ${BACKEND_DIR}
+                    mvn clean package -DskipTests
+
+                    echo "=== Build output ==="
+                    ls -lh ${BACKEND_DIR}/target/*.jar
+                '''
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════
+        // STAGE 3 — TEST
+        // ═════════════════════════════════════════════════════════
+        //
+        // WHAT IS THIS STAGE?
+        // This stage runs all the JUnit tests in your project
+        // to make sure your code works correctly.
+        //
+        // WHY DO WE DO THIS?
+        // Every time you change code, you might accidentally
+        // break something that was working before.
+        // Tests automatically catch these problems before
+        // your code reaches production.
+        //
+        // WHAT IS THE timeout(3 MINUTES)?
+        // Spring Boot tries to fully start your application
+        // during tests - connecting to MongoDB, starting web server etc.
+        // This causes tests to hang forever and never finish.
+        // The timeout kills the stage after 3 minutes if it hangs.
+        //
+        // WHAT ARE THESE LONG -D FLAGS?
+        // -Dspring.main.web-application-type=none
+        //   → Tells Spring Boot: don't start a web server during tests
+        //     Just run the tests and exit
+        //
+        // -Dspring.autoconfigure.exclude=...MongoAutoConfiguration...
+        //   → Tells Spring Boot: don't try to connect to MongoDB
+        //     during tests. We don't need a real database to test logic.
+        //
+        // -Dmaven.test.failure.ignore=true
+        //   → Even if some tests fail, continue to the next stage
+        //     so we can still see the SonarQube report.
+        //     Jenkins will still mark the stage as UNSTABLE (yellow)
+        //     not FAILED (red) so the pipeline continues.
+        //
+        // WHAT IS post { always { junit } }?
+        // "post" means: do this AFTER the stage runs.
+        // "always" means: do this whether tests passed or failed.
+        // junit publishes the test results as a report in Jenkins UI.
+        // You can click on a build and see exactly which tests
+        // passed and which failed.
+        //
+        // WHERE ARE THE TEST RESULTS?
+        // Maven saves test results as XML files in:
+        // target/surefire-reports/*.xml
+        //
+        // ═════════════════════════════════════════════════════════
+        stage('Test') {
+            steps {
+                timeout(time: 3, unit: 'MINUTES') {
+                    sh '''
+                        echo "=== Running unit tests ==="
+                        cd ${BACKEND_DIR}
+                        mvn test \
+                            -Dspring.main.web-application-type=none \
+                            -Dspring.autoconfigure.exclude=org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration,org.springframework.boot.autoconfigure.data.mongo.MongoDataAutoConfiguration \
+                            -Dmaven.test.failure.ignore=true
+
+                        echo "=== Test results ==="
+                        ls -lh ${BACKEND_DIR}/target/surefire-reports/ 2>/dev/null || echo "No test reports found"
+                    '''
+                }
+            }
+            post {
+                always {
+                    // Publish test results in Jenkins UI
+                    // Even if tests fail, we still want to see the report
+                    junit allowEmptyResults: true,
+                          testResults: "${BACKEND_DIR}/target/surefire-reports/*.xml"
+                }
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════
+        // STAGE 4 — SONARQUBE ANALYSIS
+        // ═════════════════════════════════════════════════════════
+        //
+        // WHAT IS THIS STAGE?
+        // This stage scans your entire codebase and sends a
+        // detailed report to SonarQube for analysis.
+        //
+        // WHY DO WE DO THIS?
+        // Writing code that works is not enough.
+        // The code also needs to be:
+        // - Secure (no vulnerabilities)
+        // - Clean (no bad practices)
+        // - Tested (covered by unit tests)
+        //
+        // SonarQube checks all of this automatically and shows
+        // you a dashboard with all issues found.
+        //
+        // WHAT DOES EACH PART DO?
+        // mvn clean verify
+        //   → clean: delete old build files
+        //   → verify: compile + test + run JaCoCo coverage report
+        //   → JaCoCo measures which lines were covered by tests
+        //   → Without this, SonarQube has no coverage data
+        //
+        // sonar-maven-plugin:sonar
+        //   → This is the SonarQube scanner plugin
+        //   → It reads your code and sends it to SonarQube server
+        //
+        // -Dsonar.projectKey=todo-api
+        //   → Identifies which project in SonarQube to update
+        //   → Must match what you created in SonarQube dashboard
+        //
+        // -Dsonar.projectName='todo-api'
+        //   → Display name shown in SonarQube dashboard
+        //
+        // -Dsonar.host.url=${SONAR_HOST}
+        //   → URL of your SonarQube server
+        //
+        // -Dsonar.token=${SONAR_TOKEN}
+        //   → Authentication token (fetched from AWS in Stage 1)
+        //   → SonarQube uses this to verify who is sending the scan
+        //
+        // WHAT DOES SONARQUBE CHECK?
+        // Bugs         → code that will probably crash or give wrong results
+        // Vulnerabilities → security holes (SQL injection, exposed passwords etc.)
+        // Code Smells  → bad practices that make code hard to maintain
+        // Coverage     → % of code covered by your unit tests
+        // Duplications → copy-pasted code that should be refactored
+        //
+        // WHERE DO YOU SEE RESULTS?
+        // After this stage, go to: http://10.48.17.40:32000
+        // Click on project "todo-api" to see the full report
+        //
+        // ═════════════════════════════════════════════════════════
+        stage('SonarQube Analysis') {
+            steps {
+                sh '''
+                    echo "=== Starting SonarQube Analysis ==="
+                    cd ${BACKEND_DIR}
+                    mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+                        -Dspring.main.web-application-type=none \
+                        -Dspring.autoconfigure.exclude=org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration,org.springframework.boot.autoconfigure.data.mongo.MongoDataAutoConfiguration \
+                        -Dsonar.projectKey=todo-api \
+                        -Dsonar.projectName='todo-api' \
+                        -Dsonar.host.url=${SONAR_HOST} \
+                        -Dsonar.token=${SONAR_TOKEN}
+
+                    echo "=== SonarQube scan complete - check dashboard at ${SONAR_HOST} ==="
+                '''
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════
+        // STAGE 5 — QUALITY GATE
+        // ═════════════════════════════════════════════════════════
+        //
+        // WHAT IS THIS STAGE?
+        // This stage WAITS for SonarQube to finish its analysis
+        // and then asks: "Did the code meet our quality standards?"
+        //
+        // WHY DO WE DO THIS?
+        // Stage 4 only SENDS the code to SonarQube.
+        // SonarQube then takes time to analyze it (30 seconds to few minutes).
+        // This stage waits for that analysis to complete and
+        // then checks the result.
+        //
+        // WHAT IS A QUALITY GATE?
+        // A Quality Gate is a set of rules you define in SonarQube.
+        // Your rule is: "Code coverage must be at least 90%"
+        // If coverage is 85% → FAIL → pipeline stops here
+        // If coverage is 92% → PASS → pipeline continues
+        //
+        // HOW DOES JENKINS KNOW WHEN SONARQUBE IS DONE?
+        // SonarQube sends a "webhook" (HTTP callback) to Jenkins
+        // when analysis is complete. This is why you configured
+        // SonarQube server under Manage Jenkins → System.
+        //
+        // WHAT IS abortPipeline: true?
+        // If the quality gate FAILS:
+        //   abortPipeline: true  → stop the pipeline with FAILURE ❌
+        //   abortPipeline: false → show warning but continue anyway
+        // We use true so bad code never gets deployed.
+        //
+        // WHAT IS timeout(5 MINUTES)?
+        // If SonarQube takes more than 5 minutes to respond,
+        // stop waiting and mark the stage as failed.
+        // This prevents the pipeline from waiting forever.
+        //
+        // ═════════════════════════════════════════════════════════
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    // waitForQualityGate is provided by SonarQube Scanner plugin
+                    // It pauses the pipeline and waits for SonarQube webhook
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════
+        // STAGE 6 — PUSH TO JFROG
+        // ═════════════════════════════════════════════════════════
+        //
+        // WHAT IS THIS STAGE?
+        // This stage uploads your compiled JAR file to JFrog
+        // Artifactory for safe storage with version tracking.
+        //
+        // WHY DO WE STORE IN JFROG?
+        // Think of JFrog like a "warehouse" for your software.
+        // Every successful build creates a versioned artifact stored there.
+        // Benefits:
+        // 1. Version history → you have every version ever built
+        // 2. Rollback → if v1.0.5 has a bug, deploy v1.0.4 in seconds
+        // 3. Audit trail → know exactly what version is running where
+        // 4. Single source of truth → deploy always from JFrog, never from local
+        //
+        // HOW DOES THE UPLOAD WORK?
+        // We use "curl" which is a command-line tool to make HTTP requests.
+        // JFrog has a REST API that accepts file uploads.
+        //
+        // WHAT DOES EACH CURL FLAG MEAN?
+        // -u ${JFROG_USER}:${JFROG_TOKEN}
+        //   → Authentication: username and token (from AWS secrets)
+        //
+        // -T ${JAR_FILE}
+        //   → -T means "upload this file"
+        //   → ${JAR_FILE} is the path to your compiled .jar
+        //
+        // The URL structure:
+        // http://server:port/artifactory/REPO_NAME/GROUP/ARTIFACT/VERSION/file.jar
+        // Example:
+        // http://10.48.17.40:30465/artifactory/todo-libs-release/com/todo/todo-api/1.0.5/todo-api-1.0.5.jar
+        //
+        // WHAT IS find ... ! -name "*sources*"?
+        // Maven sometimes creates two JARs:
+        //   todo-api-0.0.1.jar          → the real runnable app
+        //   todo-api-0.0.1-sources.jar  → just the source code (not runnable)
+        // ! -name "*sources*" means: exclude files with "sources" in the name
+        // head -1 means: take only the first result
+        //
+        // ═════════════════════════════════════════════════════════
+        stage('Push to JFrog') {
+            steps {
+                sh '''
+                    echo "=== Finding JAR file ==="
+                    JAR_FILE=$(find ${BACKEND_DIR}/target -name "*.jar" ! -name "*sources*" | head -1)
+                    echo "Found JAR: ${JAR_FILE}"
+
+                    echo "=== Uploading to JFrog as version ${ARTIFACT_VERSION} ==="
+                    curl -u ${JFROG_USER}:${JFROG_TOKEN} \
+                        -T ${JAR_FILE} \
+                        "${JFROG_URL}/artifactory/${JFROG_REPO}/com/todo/todo-api/${ARTIFACT_VERSION}/todo-api-${ARTIFACT_VERSION}.jar"
+
+                    echo ""
+                    echo "=== Verifying upload ==="
+                    curl -s -o /dev/null -w "Upload response code: %{http_code}" \
+                        -u ${JFROG_USER}:${JFROG_TOKEN} \
+                        "${JFROG_URL}/artifactory/${JFROG_REPO}/com/todo/todo-api/${ARTIFACT_VERSION}/todo-api-${ARTIFACT_VERSION}.jar"
+
+                    echo ""
+                    echo "=== Artifact stored at ==="
+                    echo "${JFROG_URL}/artifactory/${JFROG_REPO}/com/todo/todo-api/${ARTIFACT_VERSION}/todo-api-${ARTIFACT_VERSION}.jar"
+                '''
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════
+        // STAGE 7 — APPROVAL GATE (MANUAL)
+        // ═════════════════════════════════════════════════════════
+        //
+        // WHAT IS THIS STAGE?
+        // This stage PAUSES the pipeline completely and waits
+        // for YOU to manually click "Proceed" or "Abort".
+        //
+        // WHY DO WE DO THIS?
+        // Automatic deployment is risky in some situations.
+        // Before deploying, you might want to:
+        // - Review the SonarQube report yourself
+        // - Check the JFrog artifact was uploaded correctly
+        // - Make sure it's the right time to deploy (not during peak hours)
+        // - Get sign-off from your team
+        //
+        // HOW LONG DOES IT WAIT?
+        // timeout(time: 10, unit: 'MINUTES')
+        // → If nobody clicks Proceed within 10 minutes, pipeline ABORTS
+        // → Change to HOURS if you want more time to review
+        //
+        // WHAT DOES THE PERSON SEE?
+        // In Jenkins UI, the pipeline will show a PAUSED state.
+        // There will be a blue banner saying:
+        // "Deploy version 1.0.5 to production?"
+        // With two buttons: [Proceed] and [Abort]
+        //
+        // WHO CAN APPROVE?
+        // Anyone who can access Jenkins and view the pipeline.
+        // You can restrict this to specific users if needed.
+        //
+        // WHAT HAPPENS AFTER APPROVAL?
+        // If you click PROCEED → pipeline continues to Deploy stages
+        // If you click ABORT   → pipeline stops with ABORTED status
+        //                        (not FAILURE — it was intentional)
+        //
+        // ═════════════════════════════════════════════════════════
+        stage('Approval Gate') {
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    input message: """
+                        Deploy version ${ARTIFACT_VERSION} to server?
+
+                        Please verify before proceeding:
+                        ✅ SonarQube quality gate passed
+                        ✅ Test results look good
+                        ✅ JFrog artifact uploaded correctly
+
+                        Check SonarQube: ${SONAR_HOST}
+                        Check JFrog:     ${JFROG_URL}
+                    """,
+                    ok: 'Yes, Deploy Now'
+                }
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════
+        // STAGE 8 — DEPLOY BACKEND
+        // ═════════════════════════════════════════════════════════
+        //
+        // WHAT IS THIS STAGE?
+        // This stage downloads the JAR from JFrog and starts
+        // the Spring Boot backend application on the server.
+        //
+        // WHY DOWNLOAD FROM JFROG INSTEAD OF USING LOCAL JAR?
+        // The whole point of JFrog is to be the single source of truth.
+        // We always deploy from JFrog, not from the build workspace.
+        // This ensures what's running is exactly what was stored and verified.
+        //
+        // WHAT DOES EACH COMMAND DO?
+        //
+        // curl -u ... -o todo-api-VERSION.jar URL
+        //   → Downloads the JAR from JFrog
+        //   → -o means: save output to this filename
+        //
+        // pkill -f "todo-api" || true
+        //   → pkill kills any running process whose name contains "todo-api"
+        //   → This stops the currently running version of the app
+        //   → "|| true" means: if nothing is running, don't fail — continue
+        //
+        // sleep 3
+        //   → Wait 3 seconds to make sure the old process is fully stopped
+        //   → Without this, the old and new app might both try to use port 8080
+        //
+        // nohup ... &
+        //   → nohup means: keep running even after Jenkins disconnects
+        //     (normally when Jenkins finishes a stage, child processes stop)
+        //   → & means: run in the background (don't wait for it to finish)
+        //     Without &, Jenkins would wait forever for the app to stop
+        //
+        // java -jar todo-api-VERSION.jar
+        //   → Starts your Spring Boot application
+        //
+        // --spring.data.mongodb.username=${MONGO_USER}
+        // --spring.data.mongodb.password=${MONGO_PASSWORD}
+        //   → Pass MongoDB credentials as command line arguments
+        //   → These override whatever is in application.properties
+        //   → This is how we avoid storing passwords in config files
+        //
+        // > ${BACKEND_DIR}/app.log 2>&1
+        //   → > redirects stdout (normal output) to app.log file
+        //   → 2>&1 means also redirect stderr (error output) to same file
+        //   → So ALL app output goes to app.log
+        //   → You can check logs with: tail -f /home/ubuntu1/todo-api/app.log
+        //
+        // ═════════════════════════════════════════════════════════
+        stage('Deploy Backend') {
+            steps {
+                sh '''
+                    echo "=== Downloading artifact from JFrog ==="
+                    curl -u ${JFROG_USER}:${JFROG_TOKEN} \
+                        -o ${BACKEND_DIR}/todo-api-${ARTIFACT_VERSION}.jar \
+                        "${JFROG_URL}/artifactory/${JFROG_REPO}/com/todo/todo-api/${ARTIFACT_VERSION}/todo-api-${ARTIFACT_VERSION}.jar"
+
+                    echo "=== Stopping currently running backend ==="
+                    pkill -f "todo-api" || true
+                    sleep 3
+                    echo "Old instance stopped"
+
+                    echo "=== Starting new version ${ARTIFACT_VERSION} ==="
+                    nohup /usr/lib/jvm/java-11-openjdk-amd64/bin/java \
+                        -jar ${BACKEND_DIR}/todo-api-${ARTIFACT_VERSION}.jar \
+                        --spring.data.mongodb.username=${MONGO_USER} \
+                        --spring.data.mongodb.password=${MONGO_PASSWORD} \
+                        > ${BACKEND_DIR}/app.log 2>&1 &
+
+                    echo "Waiting for app to start..."
+                    sleep 15
+
+                    echo "=== Checking if backend started ==="
+                    if pgrep -f "todo-api-${ARTIFACT_VERSION}" > /dev/null; then
+                        echo "Backend is running ✅"
+                    else
+                        echo "Backend failed to start ❌"
+                        echo "Last 20 lines of app.log:"
+                        tail -20 ${BACKEND_DIR}/app.log
+                        exit 1
+                    fi
+                '''
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════
+        // STAGE 9 — DEPLOY FRONTEND
+        // ═════════════════════════════════════════════════════════
+        //
+        // WHAT IS THIS STAGE?
+        // This stage starts the React.js frontend application.
+        //
+        // WHAT DOES EACH COMMAND DO?
+        //
+        // export NVM_DIR="/home/ubuntu1/.nvm"
+        //   → Sets the NVM (Node Version Manager) directory path
+        //   → NVM is a tool that lets you install multiple versions
+        //     of Node.js on the same machine
+        //
+        // source "$NVM_DIR/nvm.sh"
+        //   → "source" loads the NVM script into the current session
+        //   → Without this, "npm" and "node" commands won't be found
+        //   → NVM is not installed system-wide, so Jenkins can't find
+        //     npm unless we load NVM first
+        //
+        // pkill -f "react-scripts start" || true
+        //   → Kills any currently running React dev server
+        //   → "react-scripts start" is the command that runs React
+        //   → || true = don't fail if nothing is running
+        //
+        // sleep 3
+        //   → Wait for old server to fully stop
+        //
+        // bash env.sh
+        //   → env.sh is a script in your todo-ui folder
+        //   → It sets environment variables for React (like API URL)
+        //   → Example: REACT_APP_API_URL=http://10.48.17.40:8080
+        //
+        // nohup npm start > ui.log 2>&1 &
+        //   → npm start → starts the React development server
+        //   → nohup → keep running after Jenkins finishes
+        //   → & → run in background
+        //   → > ui.log 2>&1 → save all output to ui.log
+        //
+        // NOTE: "npm start" runs React in DEVELOPMENT mode.
+        // For production you would run "npm run build" to create
+        // static files and serve them with nginx. But for this
+        // project dev mode is fine.
+        //
+        // ═════════════════════════════════════════════════════════
+        stage('Deploy Frontend') {
+            steps {
+                sh '''
+                    echo "=== Setting up Node.js via NVM ==="
+                    export NVM_DIR="/home/ubuntu1/.nvm"
+                    source "$NVM_DIR/nvm.sh"
+
+                    echo "Node version: $(node --version)"
+                    echo "NPM version:  $(npm --version)"
+
+                    echo "=== Stopping currently running frontend ==="
+                    pkill -f "react-scripts start" || true
+                    sleep 3
+                    echo "Old instance stopped"
+
+                    echo "=== Setting environment variables ==="
+                    cd ${FRONTEND_DIR}
+                    bash env.sh
+
+                    echo "=== Starting React frontend ==="
+                    nohup npm start > ${FRONTEND_DIR}/ui.log 2>&1 &
+
+                    echo "Waiting for frontend to start..."
+                    sleep 10
+
+                    echo "=== Checking if frontend started ==="
+                    if pgrep -f "react-scripts" > /dev/null; then
+                        echo "Frontend is running ✅"
+                    else
+                        echo "Frontend failed to start ❌"
+                        echo "Last 20 lines of ui.log:"
+                        tail -20 ${FRONTEND_DIR}/ui.log
+                        exit 1
+                    fi
+                '''
+            }
+        }
+
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // POST ACTIONS
+    // ═══════════════════════════════════════════════════════════
+    //
+    // WHAT IS THIS SECTION?
+    // "post" runs AFTER all stages complete, regardless of whether
+    // the pipeline succeeded or failed.
+    //
+    // WHY DO WE NEED THIS?
+    // To show a clear final message about what happened.
+    // You can also add email/Slack notifications here later.
+    //
+    // WHAT ARE THE OPTIONS?
+    // success  → runs ONLY if all stages passed ✅
+    // failure  → runs ONLY if any stage failed ❌
+    // always   → runs no matter what (pass or fail)
+    // aborted  → runs if someone clicked Abort (e.g. at Approval Gate)
+    // unstable → runs if build is unstable (tests failed but continued)
+    //
+    // ═══════════════════════════════════════════════════════════
+    post {
+        success {
+            echo """
+            ╔══════════════════════════════════════════════╗
+            ║   PIPELINE SUCCESS ✅                        ║
+            ║   Version ${ARTIFACT_VERSION} deployed       ║
+            ║                                              ║
+            ║   Backend logs:                              ║
+            ║   tail -f /home/ubuntu1/todo-api/app.log     ║
+            ║                                              ║
+            ║   Frontend logs:                             ║
+            ║   tail -f /home/ubuntu1/todo-ui/ui.log       ║
+            ╚══════════════════════════════════════════════╝
+            """
+        }
+        failure {
+            echo """
+            ╔══════════════════════════════════════════════╗
+            ║   PIPELINE FAILED ❌                         ║
+            ║                                              ║
+            ║   Check which stage is RED in Jenkins UI     ║
+            ║   Click the stage → View Logs                ║
+            ║                                              ║
+            ║   Common fixes:                              ║
+            ║   Build failed    → check Java/Maven version ║
+            ║   Tests failed    → check app.log            ║
+            ║   Quality Gate    → check SonarQube coverage ║
+            ║   JFrog failed    → check token in AWS       ║
+            ║   Deploy failed   → check MongoDB is running ║
+            ╚══════════════════════════════════════════════╝
+            """
+        }
+        aborted {
+            echo "Pipeline was manually aborted at the Approval Gate. No deployment was made."
+        }
+    }
+
+}
