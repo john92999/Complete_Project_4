@@ -33,7 +33,7 @@ services:
   frontend:
     build:
       context: /home/ubuntu1/todo-ui
-      dockerfile: Dockerfile.frontend
+      dockerfile: Dockerfile.Frontend
     container_name: todo-frontend
     environment:
       - REACT_APP_BACKEND_SERVER_URL=http://backend:8080
