@@ -2,7 +2,7 @@ FROM maven:3.9.13-eclipse-temurin-11 AS Builder
 
 WORKDIR /app
 
-COPY /home/ubuntu/todo-api/ .
+COPY /home/ubuntu1/todo-api/ .
 
 RUN mvn clean package -DskipTests
 

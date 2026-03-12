@@ -2,7 +2,7 @@ FROM node:18
 
 WORKDIR /app
 
-COPY /home/ubuntu/todo-ui/ .
+COPY /home/ubuntu1/todo-ui/ .
 
 RUN npm install --legacy-peer-deps
 
